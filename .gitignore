@@ -1,0 +1,9 @@
+# Binárky serveru z build archivu (Discord #downloads) – nedistribuovat
+server/*
+!server/.gitkeep
+# Data herního módu
+data/*
+!data/.gitkeep
+node_modules/
+logs/*
+!logs/.gitkeep

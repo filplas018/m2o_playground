@@ -1,0 +1,29 @@
+# Dedikovaný server M2O v Dockeru – viz README.md
+#   docker compose up -d --build     spuštění
+#   docker compose logs -f           log serveru
+#   docker attach m2o-server         konzole serveru (odpojení: Ctrl+P, Ctrl+Q)
+services:
+  m2o:
+    build: ./docker
+    image: m2o-server:local
+    container_name: m2o-server
+    restart: unless-stopped
+    # Konzole serveru přijímá příkazy (a předává je skriptům jako consoleCommand)
+    stdin_open: true
+    tty: true
+    ports:
+      - "27015:27015/udp" # herní provoz (port v server.json)
+      - "27016:27016/tcp" # HTTP info endpoint (port + 1)
+    volumes:
+      # Binárky z build archivu (server-linux/) jen pro čtení – update = rozbalit a restartovat.
+      # Entrypoint je při startu zkopíruje do /opt/m2o vedle konfigurace a resources
+      - ./server:/opt/m2o-dist:ro
+      # Konfigurace jako složka (připojení samotného souboru Docker Desktop při startu vynuloval)
+      - ./config:/opt/m2o-config
+      - ./resources:/opt/m2o/resources
+      # Data herního módu (JSON / SQLite) – resource je ukládá do /opt/m2o/data
+      - ./data:/opt/m2o/data
+      # Log soubory serveru (vytváří si složku logs/ vedle binárky)
+      - ./logs:/opt/m2o/logs
+    environment:
+      TZ: Europe/Prague
