@@ -27,6 +27,7 @@ m2o_playground/
     ├── m2o-demo/             # oficiální demo z buildu – ~3 600 ř. serveru + 1 000 ř. klienta, nejlepší vzor API
     ├── shared-utils/         # oficiální knihovna (exports), na ní závisí m2o-demo
     └── m2o-test/             # oficiální self-test vozidel; nečinný bez proměnné M2O_SELFTEST
+                              # (oficiální resources nejsou v gitu – kopírují se z build archivu)
 ```
 
 ---

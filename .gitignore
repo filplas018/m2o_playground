@@ -1,6 +1,10 @@
 # Binárky serveru z build archivu (Discord #downloads) – nedistribuovat
 server/*
 !server/.gitkeep
+# Oficiální resources MafiaHubu z build archivu (licence neznámá) – kopírují se z archivu, viz README
+resources/m2o-demo/
+resources/m2o-test/
+resources/shared-utils/
 # Data herního módu
 data/*
 !data/.gitkeep
