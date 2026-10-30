@@ -15,6 +15,12 @@ m2o_playground/
 ├── compose.yaml              # docker compose – server M2O
 ├── m2o-cmd.sh                # pošle příkaz do konzole serveru (restart resource, refresh, status…)
 ├── play-m2o.sh               # spustí klienta M2O přes Proton v prefixu Mafie II (Steam appid 50130)
+├── native/luabridge/         # nativní doplněk hry (dinput8.dll): Lua v enginu ze serveru
+├── tools/
+│   ├── sds.py                # rozbalovač SDS archivů Mafie II pro Linux (Python, port Gibbed.Illusion, i šifrované)
+│   ├── decompile-lua.sh      # dekompilace Lua bytecode misí přes unluac (Java)
+│   ├── streammap.py          # StreamMapa.bin: co načítá který řádek, přestavba řádku (Sicílie v M2O)
+│   └── sdsconfig.py          # edit/sdsconfig.bin: výpis a úprava slotů SDS
 ├── docker/
 │   ├── Dockerfile            # Ubuntu 24.04 + knihovny, BEZ binárek serveru
 │   └── entrypoint.sh         # zkopíruje binárky, nalinkuje server.json, spustí M2OServer
@@ -24,6 +30,7 @@ m2o_playground/
 ├── logs/                     # log soubory serveru (framework.log)
 └── resources/
     ├── playground/           # náš ukázkový resource (server + client), typy, `npm run check`
+    ├── storybridge/          # most k luabridge: runLua(player, kód) přes TCP 27020
     ├── m2o-demo/             # oficiální demo z buildu – ~3 600 ř. serveru + 1 000 ř. klienta, nejlepší vzor API
     ├── shared-utils/         # oficiální knihovna (exports), na ní závisí m2o-demo
     └── m2o-test/             # oficiální self-test vozidel; nečinný bez proměnné M2O_SELFTEST
@@ -664,3 +671,234 @@ Web.emit(viewId, "ui:result", { message: "OK" });                               
 - [x] Připojení klienta ze hry (UDP 27015 přes Docker Desktop, klient 1.7.1 přes Proton).
 - [ ] Názvy kláves pro `Key.bind`, zbraně 19 a 22–34, barvy blipů 1–6.
 - [ ] Co je dostupné v klientském sandboxu (`fetch`?). Na serveru `fetch` je.
+
+---
+
+## 15. Rozbalení herních souborů na Linuxu (SDS, skripty misí)
+
+[MafiaToolkit](https://github.com/Greavesy1899/MafiaToolkit) je jen pro Windows: WinForms, `net8.0-windows`, DirectX. Má navíc licenci **PolyForm Strict**, která nedovoluje kód upravovat, takže z něj vlastní nástroj stavět nejde. Jeho SDS část ale vychází z **[Gibbed.Illusion](https://github.com/gibbed/Gibbed.Illusion)** pod licencí **zlib**, kterou úpravy dovoluje. Z ní je port do Pythonu `tools/sds.py`, který běží na Linuxu bez Windows, Wine i .NET.
+
+### Postup
+
+```bash
+G="$HOME/.steam/debian-installation/steamapps/common/Mafia II/pc/sds"
+
+python3 tools/sds.py list "$G/missionscript/m03_main.sds"         # obsah archivu
+python3 tools/sds.py extract "$G/missionscript/m03_main.sds" out/  # všechny resources + Lua
+python3 tools/sds.py scripts "$G" ~/Documents/m2o_extract/lua_bytecode   # všechny skripty ze hry (~1 min)
+tools/decompile-lua.sh ~/Documents/m2o_extract/lua_bytecode ~/Documents/m2o_extract/lua_source
+python3 tools/sds.py texts "$G/../sds_cz" ~/Documents/m2o_extract/texts_cz   # české texty, cíle, titulky (3 s)
+```
+
+- **Formát SDS v19 (PC):**
+  - hlavička `SDS\0`, verze 19, platforma `PC`;
+  - za každou hlavičkou je 4B FNV32 kontrolní součet;
+  - tabulka typů resources;
+  - datová část `UEzl` v blocích po 16 KiB (zlib, případně více zlib chunků v bloku);
+  - na konci XML s popisy resources.
+- **Skripty** jsou resources typu `Script`: cesta balíku a seznam souborů (`.lua`, `.AP`, `.SHP`) jako **Lua 5.1 bytecode s `lua_Number` = 4 B float**, což je nestandardní.
+  - Dekompilace: [unluac](https://sourceforge.net/projects/unluac/) (Java) si s floatem poradí, standardní `luadec` ne.
+  - Java není potřeba v systému: přenosná JRE 21 z Adoptium je v `~/Documents/m2o_extract/tools/jre`, `unluac.jar` vedle ní.
+- **Ověřeno na Mafii II (Classic, Steam):**
+  - ze všech SDS je to **818 skriptových souborů** (1 682 i s duplicitami v různých archivech) a všechny se dekompilovaly;
+  - z toho **63 složek příběhových misí `M01`–`M15`**: 290 souborů, ~490 000 řádků dekompilovaného kódu;
+  - dále freeride mise (`FR*`), lokace, obchody, `common/fsm`.
+- **Neumí:**
+  - `tables/tables.sds` a `tables/ingame.sds` mají jinak uloženou datovou část (pravděpodobně šifrování) a zatím se přeskakují;
+  - nerozbaluje Oodle (Definitive Edition);
+  - neumí zpětné zabalení.
+- **Výstup dekompilátoru** je čitelný, ale „strojový“ (`L1_2 = game; L1_2 = L1_2.game; …`). Názvy funkcí, globálů, entit a textových ID zůstávají.
+
+### Texty, titulky a dabing (lokalizace `sds_cz`)
+
+Dialogy, cíle i dabing jsou dostupné, `tools/sds.py` je čte stejně jako MafiaToolkit:
+- **Textové tabulky** jsou resources `MemFile` s UTF-8 textem `ID:text`. Patří sem `/tables/TextDatabase.dat` (GUI, kapitoly, cíle, nápovědy), `TextDatabase_M2.dat` / `_RTR.dat` a **titulky dialogů** `/tables/Speech/Script_<mise>_subtitles.bin` (v `script_sounds/`, `fmv/`, `script/`).
+  - `tools/sds.py texts` z `sds_cz` vytáhne 319 tabulek a **10 177 unikátních českých textů** do `all_texts.tsv` (id, text, zdroj).
+- **Propojení se skripty:** číselné ID ve skriptu (`"0251010018"`) je klíč `02_51_01_0018` v tabulce. Příklady:
+  - `0056000003` → „Nepřítel státu“ (název kapitoly);
+  - `0251010018` → „Jdi do doků v Southportu a navštiv pana Pappalarda.“ (cíl);
+  - `0252000085` → „Jídlo a pití ti vyléčí zranění.“ (nápověda).
+- **Dabing** jsou resources `Sound` (`Dabing/Script/02/1/02_99_01_1051`) ve formátu **FMOD FSB4**.
+  - `tools/sds.py extract` je uloží jako `.fsb`, [vgmstream](https://github.com/vgmstream/vgmstream) (`vgmstream-cli -o line.wav soubor.fsb`, Linux binárka v `~/Documents/m2o_extract/tools/vgmstream`) je převede na WAV.
+  - Řetězec ověřen: skript `NewsStand.lua.AP` → replika `02_99_01_1051` → titulek `302011051`: „Hej, co je novýho?“ → audio 0,94 s.
+  - Resource `Speech` mapuje ID replik na zvuky, `FxAnimSet` nese animaci obličeje.
+- **Využití v M2O bez šíření textů 2K:** některé API berou ID z herní textové databáze přímo, třeba `ActionPoint.create(x, y, z, radius, textId)` (`C_TextDatabase`). Hra si text dohledá sama ve hráčově jazyce. U ostatního (`Hud.showHint`, titulky) by mod musel texty nést s sebou. Jestli `Sound.create(…, wave)` přehraje herní dabing podle jména, je **[ověřit]**.
+- **Autorská práva:** rozbalené skripty a data jsou majetek 2K. Drž je **mimo veřejné repo** (`~/Documents/m2o_extract`, ne `m2o_playground`) a nešiř je v resources módu. Hráči mají hru, mod se může odkazovat jen na data, která už mají.
+
+### Jak fungují mise v původní hře
+
+Na příkladu `M03Main` (`M03MainScript.lua`, `M03Parts.lua`, `M03Saves.lua`, `M03_Story.lua`):
+- **Načtení dat mise:** mise si streamuje vlastní SDS (`game.sds:ActivateStreamMapLine(…)`) s entitami (Actors, FrameResource), tedy postavami, auty, triggery a body. Na ty se pak odkazuje podle jména: `game.entitywrapper:GetEntityByName("M02DetectorGarageHint")`.
+- **Řízení a události:** běh je řízený zprávami a časovači (`registerForMachineMessages`, `DelayBuffer:Insert`, `CommandBuffer`, stavové automaty v `common/fsm`).
+- **Nejpoužívanější subsystémy enginu** v příběhových misích:
+  - `entitywrapper` (4 261×), `datastore` (stav postupu, 1 402×), `delayed` (1 154×), `game` (1 072×), `hud` (949×);
+  - `sds` (streamování, 835×), `navigation` (554×), `traffic` (350×), `quests` (cíle, 347×), `radio`, `cameramanager`, `speech`, `skipscriptscene`.
+- **Nejčastější metody:**
+  - entity a pozice: `GetEntityByName`, `GetPos` / `SetPos`, `Activate` / `Deactivate`;
+  - AI a animace: `DoTalk` (dialogy), `AnimPlay`, `MoveEnt`, `CoverSide`;
+  - zprávy: `RegisterToMessages`, `HumanMessages`.
+- **Texty a cíle** jsou ID do textových tabulek (`"0251010018"` → `02_51_01_0018`, viz výše) a klíče jako `OBJECTIVE_02_TAKE_FOOD` / `QUEST_MAIN_03` pro stav úkolů. Cutscény jsou FMV / `.cut` (`fmv0301Finished`), mluvené repliky jsou `Sound` v `sds_cz/speech` a `sds_cz/script_sounds` s titulky ve stejném archivu.
+
+### Dá se příběh hrát na M2O serveru?
+
+**Původní Lua skripty přímo spustit nejde.**
+- **Chybí přístup k Lua:** M2O Scripting API 1.7 nemá přístup k Lua stroji hry. V typech není nic o Lua, misích, cutscénách ani streamování mise. Klient Lua sice interně používá (`lua_pcall` v `M2OClient.dll`), ale skriptům to nezpřístupňuje.
+- **Engine potřebuje stav singleplayeru:** skripty počítají s jedním hráčem, s entitami mise ze SDS (ty M2O nenačte, streamuje jen auta a úpravy mapy), s AI postav (dialogy, krytí, řízení) a s cutscénami. Nic z toho M2O zatím neposkytuje; NPC v M2O stojí bez AI.
+
+**Reálné cesty:**
+1. **Přepsat mise po částech do JavaScriptu na M2O.** Dekompilované skripty slouží jako „scénář“: pořadí kroků, souřadnice, názvy postav a aut, ID textů, podmínky.
+   - Z API jde pokrýt: cíle (hinty, TextLabel, blipy, waypointy), auta (`Vehicle.spawn`, zámky, palivo), postavy (`Npc.create` + `playAnim`, bez AI), triggery (`Marker`/`Volume`/`ActionPoint`), kamera a stmívání (`Camera`, `Fade`), titulky (Render2D / web view), zvuk (`Sound.create` s názvem wave), stav postupu (perzistence v `data/`) a „kooperace“ (sdílený stav na serveru).
+   - Nejde to s původními cutscénami, s AI nepřátel a jejich přestřelkami ani s dialogy postav se synchronizací rtů.
+   - Nejlepší kandidáti na start jsou jednoduché úkoly (doprav auto, dojdi na místo, vyzvedni věc) a freeride mise `FR*` (rozvoz, závod, ničení aut).
+2. **Požádat tým M2O o přístup k Lua v klientském API** (Discord, scripting help). Technicky to jde, starý M2O to dělal (viz níže). Stačilo by třeba `Lua.execute(code)` na klientovi, ideálně s whitelistem. Spolu s načtením SDS mise by to otevřelo cestu ke spouštění částí misí.
+3. **Pozice a data entit** (kde stojí Joe, kde parkuje auto mise) jsou v resources `Actors` / `FrameResource` stejných SDS. `tools/sds.py extract` je vytáhne jako `.bin`. Jejich dekódování (formát popisuje MafiaToolkit, který lze jen číst jako dokumentaci, ne kopírovat) je další krok, pokud bude potřeba víc než souřadnice ze skriptů.
+
+### Archivované repozitáře [github.com/mafia2online](https://github.com/mafia2online)
+
+| Repo | Licence | Co v něm je | K čemu se hodí |
+|---|---|---|---|
+| [m2sdk](https://github.com/mafia2online/m2sdk) (archiv) | Apache-2.0 | C++ header-only SDK pro **Steam `mafia2.exe`** (32bit): rozluštěné třídy enginu (`C_Game`, `C_Player2`, `C_Car`, `C_ScriptMachineManager`, `C_Hud`, AI…), adresy funkcí, háčky na události | Popis enginu a hlavně **spouštění Lua uvnitř hry**: `M2::Wrappers::lua::Execute(code)` vezme `lua_State` ze `C_ScriptMachineManager` (`0x1AC0C78`) a zavolá herní `luaL_loadbuffer` (`0x5D5BD0`) a `lua_pcall` (`0x5D3F80`) |
+| [Mafia2-Online](https://github.com/mafia2online/Mafia2-Online) (rc4, archiv) | – | starý M2MP klient a server (Squirrel skripty) | Ukazuje, které Lua příkazy enginu fungovaly v multiplayeru (seznam níže) |
+| [m2o-reborn](https://github.com/mafia2online/m2o-reborn) (archiv) | Apache-2.0 | rozpracovaný nástupce na m2sdk | Totéž, novější použití m2sdk |
+| [illusion-toolkit](https://github.com/mafia2online/illusion-toolkit) (aktivní) | MIT | oficiální modding toolkit týmu M2O: mapový editor, editor resources, export aut pro M2O (`car_export_m2o`), MCP server s Lua dekompilací | Jen Windows (`net10.0-windows`, WPF). Formáty (SDS, texty, Actors…) čte **neveřejné nativní jádro** `Mafia.Formats.dll`, které je přiložené jen jako Windows DLL. Na Linuxu nanejvýš přes Wine; jako zdroj popisu formátů je slabší než Gibbed |
+| m2o-node-plugin, M2Online-Resources, Module-MySQL, m2sdk-file-logger | – | starý Node/Squirrel backend a ukázky | pro M2O V2 nepotřebné |
+
+Lua příkazy enginu, které **starý M2O spouštěl v multiplayeru** přes `CLua::Execute` / `lua::Execute`:
+- **HUD a obrazovka:**
+  - `game.hud:FaderFadeIn(ms)` / `FaderFadeOut(ms)`;
+  - `game.hud:MoneyShow(bool)`, `game.hud:SpeedoMeterShow(bool)`;
+  - `game.hud:EffectAlcoholDrunk("level")`, `game.hud:EffectAlcoholHit()`.
+- **Úkoly a navigace:**
+  - `l = game.quests:NewQuest(5, 12, true, "0056000005", "0056000005")`;
+  - `pos = game.navigation:RegisterObjectivePos(x, y, l:AddObjective("0551010006"))`;
+  - `game.navigation:SetFakeTargetForGPS(pos, x, y)`, `game.navigation:UnregisterObjectivePos(pos)`;
+  - `game.gui:ShowQuestDialog(...)`.
+
+  Jsou to úkoly s textem z textových tabulek (ID), tedy stejný mechanismus jako `OBJECTIVE_*` v misích.
+- **Hráč a hra:**
+  - `game.game:GetActivePlayer():SetPos(Math:newVector(x, y, z))`;
+  - `game.game:ChangePlayerModel("…")` přes `DelayBuffer:Insert(…)`;
+  - `game.game:DisableTranslocator(bool)`;
+  - `game.cameramanager:GetPlayerMainCamera(0):EnableFPV(player, true)`.
+- **Zvuk a hudba:** `game.game:PlayMusic("…", true, 1, 1, 1)`, `StopMusic(1)`, `SoundFadeIn/Out(ms)`.
+- **Garáž a obchody:** `game.garage:SetMaxGaragePlaces(0)`, `CheatAddCars(false)`, `CheatAbandonCars()`, `game.shop:SetAllShopExplored()`.
+
+**Co z toho plyne:**
+- Lua enginu jde v multiplayeru volat a nativní úkoly, cíle s GPS, hudba a fade v něm fungovaly. Části misí tak jsou technicky spustitelné **lokálně na každém klientovi**.
+- Entity mise (postavy a auta ze SDS mise) ale vzniknou jen u toho klienta, který misi spustí, a ostatní je neuvidí, protože synchronizaci entit dělá M2O. Proto z misí půjde přenést hlavně „tenká“ vrstva (úkoly, GPS, texty, hudba, cutscény / FMV pro jednoho hráče). Postavy a auta musí spawnovat server přes M2O API.
+- **Vlastní nativní DLL s m2sdk** spustí Lua bez čekání na M2O. Je to hack: adresy platí jen pro Steam Classic build a každý hráč musí DLL mít, protože přes resources ji distribuovat nejde. Hotové řešení je `luabridge` níže.
+
+### luabridge – Lua v enginu hry ze serveru M2O (ověřeno)
+
+```mermaid
+flowchart LR
+  S["server: resource storybridge<br/>runLua(player, kód)"] -- "TCP 27020<br/>LUA id délka + kód" --> D["dinput8.dll (luabridge)<br/>ve složce Mafia II/pc"]
+  D -- "hlavní vlákno hry<br/>luaL_loadbuffer + lua_pcall" --> L["Lua stroj Mafie II<br/>game.hud, game.quests, …"]
+  D -- "HELLO steamId / RESULT id kód délka + text" --> S
+```
+
+- **Doplněk u hráče** (`native/luabridge/`, C, verze 0.2.0):
+  - proxy `dinput8.dll` ve složce `Mafia II/pc`. `play-m2o.sh` nastaví `WINEDLLOVERRIDES=dinput8=n,b`, na Windows stačí DLL do složky nakopírovat;
+  - skutečné `DirectInput8Create` přepošle systémovému dinput8;
+  - na vtable zařízení zachytí `GetDeviceState` / `GetDeviceData`, které hra volá každý snímek na hlavním vlákně. Jen tam se Lua spouští.
+  - **M2O hru mapuje do `M2OLauncher.exe`**, nejde o samostatný proces `mafia2.exe`, ale DLL se načte i tak. Build se ověřuje podle bajtů funkcí na adresách z m2sdk; když nesedí, Lua se nespouští.
+  - Sestavení na Linuxu: `native/luabridge/build.sh install` (llvm-mingw, i686). Log: `Mafia II/pc/luabridge.log`, adresa serveru: `luabridge.ini`.
+  - Po každém spuštění vrátí zásobník Lua do původního stavu (`lua_gettop`/`lua_settop`). Verze 0.1.0 tam nechávala chybové hlášky a hra pak do pár minut spadla.
+  - Záznam pádů: výjimky v hře zapíše do logu (adresa, modul, registry, návratové adresy) a u známého pádu alokátoru i stav jeho zásob.
+  - Úpravy pro načtení Sicílie (kapitola 16): zvětšení pracovních zásob načítání a haldy SDS (`[debug]` v `luabridge.ini`) a kopie `luabridge_StreamMapa.bin` do `vfs` M2O.
+- **Server** (`resources/storybridge`, port **27020/tcp** v `compose.yaml`):
+  - `Exports.get("storybridge", "runLua")(player, kód)` → Promise s `{ code, value }`, nebo `null`, když hráč doplněk nemá:
+    - `code`: `0` = OK, `1xx` = chyba při načtení (syntaxe), `2xx` = chyba za běhu, `-2` = odpojeno, `-3` = timeout;
+    - `value`: první návratová hodnota chunku (`return …`) nebo text chybové hlášky, pokud jde převést na řetězec.
+  - Dále `hasBridge(player)` a příkazy `/bridge`, `/lua …`, `/questdemo`.
+  - Konzole: `./m2o-cmd.sh "bridge status|lua <kód>|questdemo"`, např. `./m2o-cmd.sh 'bridge lua local p = game.game:GetActivePlayer():GetPos() return string.format("%.1f %.1f %.1f", p.x, p.y, p.z)'` vrátí `0: 69.6 915.3 -20.0`.
+- **Identita:** doplněk pošle Steam ID ze `steam_api.dll` hry. Ve hře s M2O to funguje a sedí s `player.steamId`. Bez Steam ID se po 10 s spáruje s jediným hráčem bez doplňku.
+- **Ověřeno ve hře (Steam Classic + M2O 1.7.1, Proton):**
+  - doplněk se připojil jako `76561198055732487`;
+  - `game.hud:FaderFadeOut/In` → `0`;
+  - `error("test")` → `202` a neexistující `game.hud:…()` → `202` (Lua opravdu běží v enginu);
+  - syntaktická chyba → `103`;
+  - `game.game:GetActivePlayer()` vrací hráče;
+  - `questdemo` (`game.quests:NewQuest` + `AddObjective("0251010018")` + `game.navigation:RegisterObjectivePos`) → `0`;
+  - návratové hodnoty a chybové hlášky (0.2.0): `return …` → text, `error("pokus")` → `202: pokus`.
+- **Bezpečnost:**
+  - Lua kód posílá jen server; doplněk nemá žádný jiný vstup.
+  - Steam ID si ale klient zatím hlásí sám a server ho nijak neověřuje. Na veřejném serveru by bylo potřeba párování ověřit (např. jednorázový kód přes `player.emit`).
+  - Nastavuj jen server, kterému věříš: `luabridge.ini` určuje, odkud se Lua přijímá.
+- **Omezení:**
+  - Lua běží jen u daného hráče. Entity, které vytvoří (auta a postavy přes Lua), M2O nesynchronizuje, ostatní hráči je neuvidí. Sdílené věci proto dělej přes API M2O na serveru, Lua jen na „tenkou“ vrstvu (úkoly, GPS, HUD, hudba, kamera, cutscény pro jednoho hráče).
+  - Adresy Lua API: `luaL_loadbuffer` 0x5D5BD0 a `lua_pcall` 0x5D3F80 (m2sdk), `lua_gettop` 0x5D2800 a `lua_settop` 0x5D2820 (staré M2O), `lua_tolstring` 0x5D3060 (dohledáno disassemblerem podle pořadí funkcí v `lapi.c`).
+
+## 16. Kapitola 1 (Sicílie) v M2O – coop pro 2 hráče (rozpracováno)
+
+Cíl: příběh pro dva. Hráč 1 je vždy Vito. Hráč 2 je v kapitole 1 vojín **Williams** (ten, co vypadne z balkonu) a po jeho smrti hraje dál za **desátníka**. Jako model má zatím `vitarmy`, protože model amerického vojáka v registru M2O není.
+
+### Co se v kapitole 1 děje (rozbor skriptů)
+
+- Skripty: `M01Sicily_Main` (`M01Main`, `M01Objectives`, `M01Saves`, `M01Story`), `M01Sicily_Part2/M01Part2Square`, `M01Sicily_Part3/m01part3main`, `M01Sicily_Part4/m01part4`. Asi 31 000 řádků po dekompilaci.
+  - Dvě části byly v **šifrovaných** archivech: `missionscript/m01part2.sds`, `m01part3.sds` a také `tables/tables.sds`.
+  - Vnější SDS v nich obsahuje jen návnadu `tables/fsfh.bin`, skutečný archiv leží od 0x10000 zašifrovaný TEA. `tools/sds.py` je teď odšifruje (port `ArchiveEncryption` z Gibbed.Illusion).
+  - Celkem 895 skriptů, výstup v `~/Documents/m2o_extract/lua_source_all`.
+- Start kapitoly: `PartLoader` → `M01Part4`. Postup:
+  - nastaví `SetMapResource("mapa_sicily")`, `SetWeatherTemplate("DT01part01sicily_svit")` a `ChangePlayerModel("VITVOP")`;
+  - hráče postaví na `(-156.802, -313.328, -236.355)`;
+  - pustí video `01_fmw_start/end`, úvodní obrazovku `0056000101/102/103` („Kapitola 1 / Domovina / Sicílie, červen 1943“) a video `fmv_0107_*`.
+- Sicílie leží ve stejném světě jako Empire Bay, jen pod ním (z ≈ −236).
+- **Williams** (entita `williams`, Thompson, styl animací `CorporalThompson`):
+  - pád z balkonu řídí Lua v `m01part4` (`DedekAction`), ne video;
+  - je to společná animace s italským vojákem `williams:AnimPlaySync(enemy_01, "sc_balcony_run_fall_m", "sc_balcony_run_fall_s", 0)`;
+  - pak `health = 0`, Williams umře a v obraně radnice pokračuje desátník (`corporal`);
+  - dřív v kapitole s Vitem leze oknem do radnice (`sc_rf03_Vito_climbe_balcony_m/_s`), to se hodí pro coop.
+- Úkoly: `0151010001`–`0151010007` (např. `0151010007` „Následuj vojína Williamse na balkón.“). Konec kapitoly: `Fmv0108Backup` → `questCom:Finished()`.
+- Nepřátelé (`itSoldier*`, `itRSoldier*`) a spojenci jsou entity předem rozmístěné v SDS mise a řídí je Lua (`TakeCover`, `Attack`). M2O NPC nemají AI a smí jich být nejvýš 16, takže boj musí běžet přes Lua u každého hráče, se stavem hlídaným serverem.
+
+### Načtení Sicílie uvnitř M2O – co padalo a proč
+
+Řádky streamování (`game.sds:ActivateStreamMapLine`) určuje `StreamMapa.bin`. M2O má vlastní kopii ve `~/Games/M2O-client/vfs/` a launcher ji při startu vrací podle `.mafiahub/build-manifest.json`. Nástroj `tools/streammap.py` vypíše, co který řádek načítá, a umí řádek přestavět. Formát je podle MIT knihovny illusion-toolkit.
+
+```mermaid
+flowchart TD
+  A["ActivateStreamMapLine(řádek Sicílie)"] --> B["načítací vlákno: 4 pracovní zásoby na jeden SDS<br/>346 112 / 780 000 / 3 213 056 / 1 700 896 B"]
+  B -->|"sicily01 potřebuje víc"| C["bump alokátor vrátí NULL → pád 0x14CFC53"]
+  B -->|"zásoby zvětšené doplňkem"| D["Sicílie se načte, mise se rozběhne"]
+  D -->|"video fmv_0107"| E["dojde 32bitový adresní prostor → hra skončí"]
+```
+
+1. **Každý řádek skupiny „Sicily“ načte i skript mise** (`m01main.sds`). Ten se sám rozběhne: uniforma, úvodní titulky, videa. Vypnout se nedal: přepsání `PartLoader` ani `DelayBuffer:RemoveGroup` nefungovaly, protože skript má funkci uloženou ve své frontě.
+2. **Pád `0x14CFC53` (EXCEPTION_ACCESS_VIOLATION)** v načítacím vlákně, hned při načítání `sicily01`/`sicily02`. Příčina se dohledala záznamem pádů a hookem konstruktoru zásob:
+   - `0x1567FB0` je konstruktor bump alokátoru (vtable `0x1920848`, pole: kapacita, kurzor, báze).
+   - Načítání má 4 pracovní zásoby, které se před každým SDS vynulují. Jejich kapacity sedí na bajt na Empire Bay; např. zásoba 780 000 B = přesně 10 × 78 000 pro freeride.
+   - `sicily01` potřebuje 225 280 + aspoň 9 × 78 000 v první zásobě a 11 × 292 096 + 3 × 876 288 ≈ 5,84 MB ve druhé (má jen 3,2 MB). Podzásoba pak dostane NULL a první zápis spadne.
+   - Zásoby si paměť berou z **hlavní haldy SDS** (vtable `0x19209AC`, ~378 MB). Hra ji vytvoří přes továrnu `0x156B680(výstup, velikost, příznak)` přesně na součet slotů + zásob, takže volné místo je 0.
+3. **Oprava v doplňku** (`luabridge.ini`):
+   ```ini
+   [debug]
+   arena_log_min=200000
+   arena_boost=346112:800000,780000:2000000,3213056:9000000,1700896:3500000
+   ```
+   Zásoby dané velikosti se zvětší a halda SDS se zvětší o jejich součet (+9,3 MB). S tím se Sicílie načte bez pádu.
+4. **Co nepomohlo:**
+   - úprava `edit/sdsconfig.bin`, pro kterou je nástroj `tools/sdsconfig.py`: počty slotů nejsou problém a větší sloty jen zabraly haldu (M2O si `SDSConfig` stejně čte a upravuje sám);
+   - odchod daleko od Empire Bay před načtením.
+5. **Vlastní řádek pro Sicílii:**
+   - `python3 tools/streammap.py make-line <orig> "Mafia II/pc/luabridge_StreamMapa.bin" fmv_0108_end free_joe_load +/sds/city/sicily01.sds …` předělá řádek `fmv_0108_end` (45) tak, aby načetl věci z freeride M2O a k nim zadaná SDS;
+   - řádky freeride (`game_main_load`, `free_*`) zůstanou beze změny, to nástroj kontroluje;
+   - doplněk soubor při startu hry zkopíruje do `vfs`, tedy až po kontrole launcheru.
+   - Po aktivaci se Empire Bay uvolní (zmizí zem i město). Mise kapitoly 1 se ale stejně rozběhne sama a načte vlastní řádky (`01_fmw_start` → `fmv_0107_*`). Kdo ji spouští, není potvrzené, podezřelý je `game_director`.
+6. **Stav na konci (ověřeno ve hře):**
+   - Sicílie se načte;
+   - zobrazí se úvodní obrazovka kapitoly a Vito je v uniformě na startovní pozici;
+   - po přeskočení videí stojí Vito sám (bez spojenců a nepřátel) a nejde ovládat, protože skript mise mu volá `LockControls(true)`;
+   - když se video nechá běžet, Wine hlásí `allocate_virtual_memory out of memory` (bloky 4 MB). Došel 32bitový adresní prostor procesu `M2OLauncher.exe`: hra + Empire Bay + CEF z M2O + Sicílie.
+
+### Další kroky
+
+1. Nepouštět původní mise ani videa. Zjistit, kdo misi spouští (`game_director` / `GameDirector.lua`: `missionNumber`, `missionPart`, `continualPlay`), a zastavit to, případně načítat Sicílii řádkem, který mise nevyvolá.
+2. Ovládání a scénu řídit ze serveru přes `storybridge`, stejně pro oba hráče: odemknout ovládání, úkoly, počasí, hudba, pozice.
+3. Ušetřit adresní prostor: načítat jen potřebné SDS a ověřit, kolik zabírají sloty, které se na Sicílii nepoužívají.
+4. Spojence a nepřátele postavit z entit mise přes Lua u obou hráčů a stav (smrti, postup) synchronizovat přes server.
+
+**Pozor na lokální úpravy:**
+- `Mafia II/pc/luabridge.ini` má zapnuté zvětšení zásob, `Mafia II/pc/luabridge_StreamMapa.bin` se při každém startu kopíruje do `vfs` M2O.
+- Pro čisté M2O smaž `[debug]` z ini a `luabridge_StreamMapa.bin`. Originál M2O vrátí launcher, záloha je v `vfs/StreamMapa.bin.orig`.
+- `edit/sdsconfig.bin` je vrácený (záloha `.orig`).

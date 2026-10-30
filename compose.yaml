@@ -14,6 +14,7 @@ services:
     ports:
       - "27015:27015/udp" # herní provoz (port v server.json)
       - "27016:27016/tcp" # HTTP info endpoint (port + 1)
+      - "27020:27020/tcp" # storybridge – nativní doplněk luabridge u hráčů (Lua v enginu hry)
     volumes:
       # Binárky z build archivu (server-linux/) jen pro čtení – update = rozbalit a restartovat.
       # Entrypoint je při startu zkopíruje do /opt/m2o vedle konfigurace a resources

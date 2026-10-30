@@ -11,3 +11,4 @@ data/*
 node_modules/
 logs/*
 !logs/.gitkeep
+native/luabridge/build/

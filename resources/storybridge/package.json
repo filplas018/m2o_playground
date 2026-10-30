@@ -1,0 +1,11 @@
+{
+  "name": "storybridge",
+  "version": "0.1.0",
+  "description": "Most mezi serverem M2O a Lua enginem Mafie II (nativní doplněk luabridge u hráče)",
+  "private": true,
+  "mafiahub": {
+    "serverScripts": ["server/main.js"],
+    "exports": ["runLua", "hasBridge"],
+    "priority": 5
+  }
+}

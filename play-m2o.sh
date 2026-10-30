@@ -19,6 +19,8 @@ export STEAM_COMPAT_INSTALL_PATH="$STEAM/steamapps/common/Mafia II"
 export SteamAppId=$APPID SteamGameId=$APPID
 # Log Protonu: ~/steam-50130.log
 export PROTON_LOG=${PROTON_LOG:-1}
+# luabridge: proxy dinput8.dll ve složce hry (native/luabridge) má přednost před vestavěným
+export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:+$WINEDLLOVERRIDES;}dinput8=n,b"
 
 cd "$CLIENT"
 exec "$RUNTIME/_v2-entry-point" --verb=waitforexitandrun -- "$PROTON/proton" waitforexitandrun "$CLIENT/M2OLauncher.exe" "$@"
